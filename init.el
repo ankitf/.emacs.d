@@ -1,6 +1,14 @@
 
+;; origami's origami-parsers.el does (require 'cl), which Emacs flags as
+;; deprecated ("Package cl is deprecated") every time it's loaded. It still
+;; works fine functionally, so just silence that specific message.
+;; (This message comes from `do-after-load-evaluation' in subr.el, gated by
+;; `byte-compile-warning-enabled-p', not the `display-warning' machinery,
+;; so `warning-suppress-types' has no effect on it -- `byte-compile-warnings'
+;; is the only lever.)
+(setq byte-compile-warnings '(not obsolete))
+
 (org-babel-load-file "~/.emacs.d/config.org")
-(org-babel-load-file "~/.emacs.d/dap-config.org")
 
 ;; A GitHub username for API authentication
 ;; (setq grip-github-user "grip-github-user")

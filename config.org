@@ -21,6 +21,25 @@
   (use-package straight
     :custom (straight-use-package-by-default t))
 #+END_SRC
+** Pin built-ins straight shouldn't reinstall
+Some MELPA packages declare a dependency on a library that already ships
+built into Emacs (e.g. ~project~, required by ~flymake-ruff~). Straight
+doesn't know that and happily clones+builds a *second*, separate copy from
+GNU ELPA, whose build directory then gets prepended to =load-path=. The
+next time anything does ~(require 'project)~ after the built-in version has
+already been loaded once, Emacs throws:
+"Feature 'project' loaded from A is now provided by B" -- which aborts
+whatever hook/mode-init triggered it (this is what silently broke
+python-ts-mode's tree-sitter fontification AND eglot/flymake startup: the
+error happened mid-way through ~python-base-mode-hook~, so hooks queued
+after the failure point, like ~eglot-ensure~ and ~flymake-ruff-load~, never
+ran).
+
+Telling straight these are ~:type built-in~ up front stops it from ever
+trying to fetch a separate copy.
+#+BEGIN_SRC emacs-lisp
+  (straight-use-package '(project :type built-in))
+#+END_SRC
 
 * Emacs Startup
   Hide the startup message
@@ -159,6 +178,40 @@ Ido like directory navigation in vertico.
 				 (window-parameters (mode-line-format . none))))
   )
 
+#+END_SRC
+** Corfu
+In-buffer completion popup. Pairs with vertico/orderless/marginalia/embark
+for a single, consistent minimalist completion stack (replaces company-mode
+everywhere -- Python, elisp, JS/TS, etc).
+[[https://github.com/minad/corfu][github]]
+#+BEGIN_SRC emacs-lisp
+(use-package corfu
+  :straight (corfu :files (:defaults "extensions/*")
+					:includes (corfu-popupinfo))
+  :init (global-corfu-mode)
+  :custom
+  (corfu-cycle t)
+  (corfu-auto t)
+  (corfu-auto-prefix 1)
+  (corfu-auto-delay 0.1)
+  (corfu-preview-current nil)
+  (corfu-quit-no-match 'separator)
+  (tab-always-indent 'complete)
+  :hook (corfu-mode . corfu-popupinfo-mode)
+  )
+#+END_SRC
+** Cape
+Completion-at-point extensions. Adds dabbrev/file/keyword sources on top of
+corfu, the way company-dabbrev-code/company-files used to.
+[[https://github.com/minad/cape][github]]
+#+BEGIN_SRC emacs-lisp
+(use-package cape
+  :straight t
+  :init
+  (add-hook 'completion-at-point-functions #'cape-dabbrev)
+  (add-hook 'completion-at-point-functions #'cape-file)
+  (add-hook 'completion-at-point-functions #'cape-keyword)
+  )
 #+END_SRC
 ** SaveHist
 Persists history over emacs restarts. Vertico sorts by history position.
@@ -378,7 +431,7 @@ Simplified access to sytem clipboard.
 	(use-package hideshow
 	  :straight t
 	  :init
-	  (add-hook 'python-mode-hook #'hs-minor-mode)
+	  (add-hook 'python-base-mode-hook #'hs-minor-mode)
 
 	  :config 
 	  (defun toggle-fold ()
@@ -508,138 +561,106 @@ Simplified access to sytem clipboard.
 
 #+END_SRC
 
-* Flycheck
-Modern on-the-fly syntax checking for emacs. Supposed to be replacement for inbuild flymake
-#+begin_src emacs-lisp
-  (use-package flycheck
-	:straight t
-	:ensure t
-	:config
-	(add-hook 'after-init-hook #'global-flycheck-mode)
-	(flycheck-add-mode 'typescript-tslint 'web-mode)
-	(flycheck-add-mode 'typescript-tslint 'jtsx-jsx-mode)
-	(flycheck-add-mode 'typescript-tslint 'jtsx-tsx-mode)
-	(flycheck-add-mode 'typescript-tslint 'jtsx-typescript-mode)
-	)
-#+end_src
-
 * Python setup
-** Python
+** Tree-sitter grammar
+   Install the python tree-sitter grammar once (no-op if already present).
+   Needed for ~python-ts-mode~ below.
 #+begin_src emacs-lisp
-  (use-package python-mode
+  (use-package treesit
+	:straight nil
 	:ensure nil
-	:custom
-	(when (and (executable-find "python3")
-			 (string= python-shell-interpreter "python"))
-	(setq python-shell-interpreter "python3"))
-	(py-underscore-word-syntax-p-off)
-	;; (python-shell-interpreter "python3")
-	)
+	:config
+	(add-to-list 'treesit-language-source-alist
+				 '(python "https://github.com/tree-sitter/tree-sitter-python"))
+	(unless (treesit-language-available-p 'python)
+	  (treesit-install-language-grammar 'python)))
 #+end_src
-** Python Virtual environment
-   I have dedicated a virtual environment for emacs related python packages.
-   Make sure to include the requirement.txt of this env to .emacs.d git repo.
-#+BEGIN_SRC emacs-lisp
-  ;; (use-package pyvenv
-  ;;   :straight t
-  ;;   :config
-  ;;   ;; (pyvenv-activate "~/.virtualenvs/emacs-virtualenv")
-  ;;   (setenv "WORKON_HOME" "~/virtualenvs")
-  ;;   (setq pyvenv-mode-line-indicator '(pyvenv-virtual-env-name ("[venv:" pyvenv-virtual-env-name "] ")))
-  ;;   (pyvenv-mode t))
-#+END_SRC
-** Elpy
-#+BEGIN_SRC emacs-lisp
-  ;; (use-package elpy
-  ;;   :straight t
-  ;;   :init (advice-add 'python-mode :before 'elpy-enable)
-  ;;   ;; :hook (elpy-mode . (lambda () (add-hook 'before-save-hook 'elpy-format-code)))
-  ;;   :custom
-  ;;   (elpy-rpc-virtualenv-path 'current)  ;; this makes elpy use direnv venvs, check direnv setup section
-  ;;   ;; :config
-  ;;   ;; (setq elpy-rpc-virtualenv-path "~/virtualenvs/emacs_virtualenv/")
-  ;;   (elpy-enable))
-#+END_SRC   
-** DISABLED Jedi
-#+BEGIN_SRC emacs-lisp
-  ;; (use-package jedi
-  ;;   :straight t
-  ;;   :init
-  ;;   (add-hook 'python-mode-hook 'jedi:setup)
-  ;;   :config
-  ;;   (setq jedi:setup-keys t))
-#+END_SRC
-** py-autopep8
-#+BEGIN_SRC emacs-lisp
-  (use-package py-autopep8
+** Python
+   Built-in ~python.el~, remapped to the tree-sitter ~python-ts-mode~ for
+   faster/more accurate indentation & highlighting.
+
+   NOTE: the third-party ~python-mode~ package (Barry Warsaw / Andreas
+   Röhler's fork, distinct from this file) used to be installed here and
+   defines a major-mode command with the *exact same name* (~python-mode~)
+   as the built-in one, silently shadowing it depending on load order. It
+   has intentionally been removed.
+#+begin_src emacs-lisp
+  (use-package python
+	:straight nil
+	:ensure nil
+	:mode ("\\.py\\'" . python-ts-mode)
+	:interpreter ("python3" . python-ts-mode)
+	:config
+	(add-to-list 'major-mode-remap-alist '(python-mode . python-ts-mode))
+	(when (and (executable-find "python3")
+			   (string= python-shell-interpreter "python"))
+	  (setq python-shell-interpreter "python3")))
+#+end_src
+** emacs-pet
+   Python Executable Tracker. Auto-detects the right interpreter/venv per
+   project (poetry, pipenv, conda, pyenv, plain venv, pre-commit) and wires
+   it, per-buffer, into eglot, dap-mode, ruff, and python-pytest below --
+   no manual venv activation needed.
+   https://github.com/wyuenho/emacs-pet
+#+begin_src emacs-lisp
+  (use-package pet
 	:straight t
 	:config
-	(setq py-autopep8-options '("--aggressive"))
-	(setq py-autopep8-on-save-p nil)
-	:hook ((python-mode) . py-autopep8-mode)
-   )
-#+END_SRC      
-** python-black
-#+BEGIN_SRC emacs-lisp
-  (use-package python-black
+	(add-hook 'python-base-mode-hook 'pet-mode -10))
+#+end_src
+** Ruff
+   Single fast tool for formatting, linting, and import sorting -- replaces
+   black + isort + autopep8 + flake8. ~ruff-format-command~ and
+   ~flymake-ruff-program~ get pointed at the venv's ruff automatically by
+   pet-mode above.
+#+begin_src emacs-lisp
+  (use-package ruff-format
 	:straight t
-	:demand t
-	:after python)
+	:hook (python-base-mode . ruff-format-on-save-mode))
 
-#+END_SRC      
+  (use-package flymake-ruff
+	:straight t
+	:hook (python-base-mode . flymake-ruff-load))
+#+end_src
+** python-pytest
+   Run/debug a single test, def/class at point, file, or the whole suite
+   without leaving Emacs.
+   https://github.com/wbolster/emacs-python-pytest
+#+begin_src emacs-lisp
+  (use-package python-pytest
+	:straight t
+	:after python
+	:bind (:map python-base-mode-map
+				("C-c t t" . python-pytest-dispatch)
+				("C-c t f" . python-pytest-file-dwim)
+				("C-c t F" . python-pytest-file)
+				("C-c t d" . python-pytest-run-def-or-class-at-point-dwim)
+				("C-c t r" . python-pytest-repeat)
+				("C-c t x" . python-pytest-last-failed)))
+#+end_src
 ** sphinx docs
-#+BEGIN_SRC emacs-lisp
+   Generates reST/Sphinx-style docstring skeletons (:param:, :type:,
+   :returns:).
+#+begin_src emacs-lisp
    (use-package sphinx-doc
 	   :straight (sphinx-doc :host github
 							 :repo "naiquevin/sphinx-doc.el"
 							 :branch "master")
-	  :config (add-hook 'python-mode-hook (lambda ()
-	  (sphinx-doc-mode t)))
-	  )
-  (message "sphinx loaded")
-#+END_SRC
-** DISABLED with-env
-Execute with Python virtual environment activated
-#+begin_src emacs-lisp
-  ;; (use-package with-venv
-  ;;   :straight (:host github :repo "10sr/with-venv-el")
-  ;;   )
-#+end_src
-** emacs-pet
-https://github.com/wyuenho/emacs-pet
-Python Executable Tracker
-#+begin_src emacs-lisp
-  (use-package pet
-	:config
-	(add-hook 'python-base-mode-hook 'pet-mode -10))
-#+end_src
-** emacs-python-isort
-Sort imports alphabetically and in sections automatically.
-#+begin_src emacs-lisp
-  (use-package python-isort
-    :straight t
-    )
+	  :hook (python-base-mode . sphinx-doc-mode))
 #+end_src
 ** direnv setup
-https://blog.jasper.es/elpy-direnv.html
+   ~envrc~ sets environment variables per-buffer (based on the project's
+   .envrc), which is what actually matters for venv activation. The older
+   global-state ~direnv~ package has been dropped as redundant.
+   https://blog.jasper.es/elpy-direnv.html
 #+begin_src emacs-lisp
   (use-package exec-path-from-shell
-	:config (progn (exec-path-from-shell-initialize)))
-  (use-package direnv
-	:after exec-path-from-shell
-	:config (direnv-mode))
+	:config (exec-path-from-shell-initialize))
 
   (use-package envrc
+	:straight t
 	:hook (after-init . envrc-global-mode))
 #+end_src
-** poetry
-#+BEGIN_SRC emacs-lisp
-  (use-package poetry
-	:straight t
-	:ensure t
-	:after python)
-
-#+END_SRC
 
 * Emacs Ipython Notebook EIN
   Jypyter notebook client for emacs. 
@@ -810,29 +831,6 @@ Model file manager. now working as of now with below error.
     )
 #+end_src
 
-* Company
-Code and text completion
-#+begin_src emacs-lisp
-  (use-package company
-	:straight t
-	:ensure t
-	:defer t
-	:custom
-	(company-minimum-prefix-length 1)
-	(company-idle-delay 0.1)
-	(company-tooltip-align-annotations t)
-	(company-require-match 'never)
-	;; dont use company is following modes
-	(company-global-modes '(not eshell-mode shell-mode eaf-mode))
-	(company-dabbrev-downcase nil)
-	(company-dabbrev-other-buffers t) ;; search buffers with same major mode
-	(company-dabbrev-ignore-case t)
-	(company-selection-wrap-around t)
-	(setq company-backends '((company-capf company-dabbrev-code company-files)))
-	(global-company-mode t)
-	)
-#+end_src
-
 * TODO Prescient
 
 * TODO Mwin - Move where I Mean
@@ -859,180 +857,94 @@ https://github.com/manateelazycat/lsp-bridge
 #+end_src
 #+END_COMMENT
 
-* LSP mode.
-IDE like experience in emacs with debugger support.
-** Fix LSP performance issues
-https://emacs-lsp.github.io/lsp-mode/page/performance/
+* Eglot
+Built-in LSP client. Replaces lsp-mode/lsp-ui/lsp-pyright/lsp-treemacs for
+every language (Python, JSX/TSX/TS, Tailwind) -- one client, one set of
+keybindings, less config surface.
+** Performance
+https://www.gnu.org/software/emacs/manual/html_node/eglot/Connecting-to-a-server.html
 #+begin_src emacs-lisp
   (setq gc-cons-threshold 100000000)
   (setq read-process-output-max (* 1024 1024)) ;; 1mb
-  (setq lsp-log-io nil) ; if set to true can cause a performance hit
-
 #+end_src
-
+** eglot
 #+begin_src emacs-lisp
-  (use-package lsp-mode
-	:straight (:host github :repo "emacs-lsp/lsp-mode")
-	:init
-	(setq lsp-keymap-prefix "C-c l")
-	:hook ((python-mode . lsp-deferred)			
-		   (lsp-mode . lsp-enable-which-key-integration)
-		   (jtsx-jsx-mode . lsp)
-		   (jtsx-tsx-mode . lsp)
-		   (jtsx-typescript-mode . lsp))
-	:commands (lsp lsp-deferred)
-	:config
-	(setq lsp-enable-symbol-highlighting t)
-	(setq lsp-lens-enable t)
-	(setq lsp-headerline-breadcrumb-enable t)
-	(setq lsp-completion-enable t)
-	(setq lsp-modeline-diagnostic-enable t)
-	(setq lsp-enable-snippet t)
-	(setq lsp-completion-provider :capf)
-
-	(setq lsp-enable-symbol-highlighting t)
-	(setq lsp-ui-doc-enable t)
-	(setq lsp-ui-doc-show-with-cursor t)
-	(setq lsp-ui-doc-show-with-mouse t)
-	(setq lsp-lens-enable t)
-	(setq lsp-headerline-breadcrumb-enable t)
-	(setq lsp-ui-sideline-enable t)
-	(setq lsp-ui-sideline-show-code-actions nil)
-	(setq lsp-ui-sideline-show-hover nil)
-	(setq lsp-modelne-code-actions-enable t)
-
-	(setq lsp-diagnostic-provider :flycheck)
-	(setq lsp-ui-sideline-show-diagnostic t)
-	(setq lsp-eldoc-enable-hover t)
-	(setq lsp-modeline-diagnostic-enable t)
-	(setq lsp-signature-auto-activate t)
-	(setq lsp-signature-render-documentation t)
-
-	;; fixes double imports and tsconfig popup in ts ls server
-	(setq lsp-apply-edits-after-file-operations nil)
-
-	;; pylsp plugins
-	;; (setq lsp-pylsp-plugins-flake8-enabled t)
-	;; (setq lsp-pylsp-plugins-autopep8-enabled t)
-	;; (setq lsp-pylsp-plugins-mccabe-enabled t)
-
-	)
-  ;;  putting clients subdir to load_path as mentioned in lsp installation page.
-  (add-to-list 'load-path (expand-file-name "straight/repos/lsp-mode" user-emacs-directory))
-  (add-to-list 'load-path (expand-file-name "straight/repos/lsp-mode/clients" user-emacs-directory))
-#+end_src
-
-** LSP UI
-
-#+begin_src emacs-lisp
-  (use-package lsp-ui
-	:after lsp-mode
-	:commands lsp-ui-mode
-	:hook (lsp-mode . lsp-ui-mode)
+  (use-package eglot
+	:straight nil
+	:ensure nil
+	:hook ((python-base-mode . eglot-ensure)
+		   (jtsx-jsx-mode . eglot-ensure)
+		   (jtsx-tsx-mode . eglot-ensure)
+		   (jtsx-typescript-mode . eglot-ensure))
+	:bind (:map eglot-mode-map
+				("C-c l r" . eglot-rename)
+				("C-c l a" . eglot-code-actions)
+				("C-c l f" . eglot-format)
+				("C-c l d" . eglot-find-declaration)
+				("C-c l i" . eglot-find-implementation))
 	:custom
-	(setq lsp-ui-doc-postion 'at-point)
-	(setq lsp-ui-sideline-delay 0.1)
-	(setq lsp-ui-peek-always-show t)
-
-	)
-#+end_src
-
-
-** LSP pyright
-#+begin_src emacs-lisp
-  (use-package lsp-pyright
-	:ensure t
-	:custom (lsp-pyright-langserver-command "basedpyright") ;; or basedpyright
-
-	:hook (python-mode . (lambda ()
-						   (require 'lsp-pyright)
-						   (lsp-deferred)))
+	(eglot-autoshutdown t)
+	(eglot-extend-to-xref t)
 	:config
-	(setq lsp-enable-file-watchers nil)
-	) 
+	;; Python -- basedpyright for type-checking/nav; ruff (see Python setup)
+	;; handles formatting/linting/import-sort via flymake-ruff + ruff-format
+	;; instead, since eglot can't run two LSP servers on one buffer as
+	;; easily as lsp-mode could.
+	(add-to-list 'eglot-server-programs
+				 '((python-ts-mode python-mode) . ("basedpyright-langserver" "--stdio")))
+	;; JSX/TSX/TS via jtsx's custom modes.
+	(add-to-list 'eglot-server-programs
+				 '((jtsx-jsx-mode jtsx-tsx-mode jtsx-typescript-mode)
+				   . ("typescript-language-server" "--stdio"))))
 #+end_src
-
-** LSP treemacs
-
+** eldoc-box
+Popup hover docs/signatures near point (childframe), replacing lsp-ui-doc.
+https://github.com/casouri/eldoc-box
 #+begin_src emacs-lisp
-  (use-package lsp-treemacs
-    :straight t
-    :config
-    (lsp-treemacs-sync-mode 1)
-    )
+  (use-package eldoc-box
+	:straight t
+	:hook (eglot-managed-mode . eldoc-box-hover-mode))
 #+end_src
-
 
 * DAP - Debug Adaptor Protocol
 #+begin_src emacs-lisp
   (use-package dap-mode
-    :ensure t :after lsp-mode
-    :hook ((python-mode . dap-ui-mode)
-           (python-mode . dap-mode))
+    :straight t
+    :hook ((python-base-mode . dap-ui-mode)
+           (python-base-mode . dap-mode))
     :config
     (require 'dap-python)
     (require 'dap-ui)
-    (setq dap-python-debugger `debugpy)
+    (setq dap-python-debugger 'debugpy)
+    ;; NOTE: dap-python-executable is set buffer-locally by pet-mode (see
+    ;; Python setup) to the project's actual venv python -- no manual
+    ;; pyenv/venv resolution override needed here.
     (dap-mode 1)
     (dap-ui-mode 1)
     ;; enable mouse hover support
     (dap-tooltip-mode 1)
     ;; if it is not enabled, `dap-mode` will use the minibuffer
     (tooltip-mode t)
-    (dap-ui-controls-mode 1)
+    (dap-ui-controls-mode 1))
+#+end_src
+** Project-local debug templates
+Project-specific ~dap-register-debug-template~ calls don't belong in
+dotfiles (they used to be hardcoded here pointing at specific ~/vyn/...
+paths). Add them per-project instead via that project's .dir-locals.el,
+e.g.:
 
-    (defun dap-python--pyenv-executable-find (command)
-      (with-venv (executable-find "python")))
-
-    )
+#+begin_src emacs-lisp :tangle no
+  ;; in <project-root>/.dir-locals.el
+  ((python-ts-mode
+    . ((eval . (dap-register-debug-template
+                "My App"
+                (list :type "python"
+                      :args ""
+                      :program (expand-file-name "app/main.py" (dir-locals-find-file default-directory))
+                      :request "launch"
+                      :name "My App"))))))
 #+end_src
 
-
-* DISABLED Eglot
-#+BEGIN_COMMENT
-#+begin_src emacs-lisp
-  (use-package eglot
-	:straight t
-	:ensure t
-	:config
-	(with-eval-after-load "eglot"
-	  (add-to-list 'eglot-stay-out-of 'flymake))
-
-	;; add arduino-language server
-	;; (add-to-list 'eglot-server-programs '(c++-mode . ("~/ankit/tools/arduino-language-server/arduino-language-server"
-	;; 													"-clangd" "/usr/bin/clangd-12"
-	;; 													"-cli" "~/.local/bin/arduino-cli"
-	;; 													"-cli-config" "~/.arduino15/arduino-cli.yaml"
-	;; 													"-fqbn" "arduino:avr:mega")))
-
-	;; add cpp lsp server
-	;; (add-to-list 'eglot-server-programs
-	;; 			   '((c++mode c-mode) "clangd-12")
-	;; 			   ()
-	;; 			   `(rust-mode . ("rust-analyzer" :initializationOptions
-	;; 								   ( :procMacro (:enable t)
-	;; 									 :cargo ( :buildScripts (:enable t)
-	;; 											  :features "all"))))
-				 ;; )
-
-	;; (add-to-list 'eglot-server-programs '((jtsx-tsx-mode jtsx-typescript-mode jtsx-jsx-mode) . ("tailwindcss-language-server")))
-
-
-	:hook
-	((python-mode . eglot-ensure)
-	 ;; (arduino-mode . eglot-ensure)
-	 ;; (c++-mode . eglot-ensure)
-	 ;; (c-mode. eglot-ensure)
-	 ;; (rust-mode . eglot-ensure)
-	 (typescript-mode . eglot-ensure)
-	 (jtsx-jsx-mode . eglot-ensure)
-	 (jtsx-tsx-mode . eglot-ensure)
-	 (jtsx-typescript-mode . eglot-ensure)
-	 )
-	)
-
-#+end_src
-#+END_COMMENT
 
 * DISABLED Todoist
 #+begin_comment
@@ -1053,14 +965,14 @@ Changes global set of environment variables.
 	;; :config
 	;; (direnv-mode))
 #+end_src
-** .envrc
-Sets all the environment variables locally.
+** DISABLED .envrc
+Superseded -- ~envrc~ is now configured once, in the Python setup ->
+direnv setup section, instead of being duplicated here.
 #+begin_src emacs-lisp
-  (use-package envrc
-	:straight t
-	:config
-	(envrc-global-mode)
-	)
+  ;; (use-package envrc
+  ;;   :straight t
+  ;;   :config
+  ;;   (envrc-global-mode))
 #+end_src
 
 
@@ -1091,13 +1003,6 @@ Sets all the environment variables locally.
 	:straight t
 	)
 #+end_src
-
-* TODO Treesitter
-Inbuild from emacs 29.
-#+begin_src emacs-lisp
-  
-#+end_src
-
 
 * Frontend setup
 ** DISABLED Typescript mode
@@ -1167,15 +1072,22 @@ Formatting for js code
 #+end_src
 #+END_COMMENT
 
-** Tailwind LSP
-LSP client for tailwind. Autocompletes tailwind utility classes
+** DISABLED Tailwind LSP
+LSP client for tailwind. Autocompletes tailwind utility classes.
 
+Disabled: this package is built against lsp-mode's "add-on-mode" API,
+which lets lsp-mode run a *second* LSP server (tailwindcss) alongside the
+primary one (typescript-language-server) for the same buffer. Eglot
+doesn't have an equivalent secondary/add-on server concept, so this
+doesn't carry over cleanly to the Eglot migration. If Tailwind class
+completion becomes a hard requirement, either keep lsp-mode around just
+for this, or look into Eglot's newer multi-server support (Emacs 30+)
+as an alternative.
 #+begin_src emacs-lisp
-  (use-package lsp-tailwindcss
-	:straight (:host github :repo "merrickluo/lsp-tailwindcss")
-	:init 
-	(setq lsp-tailwindcss-add-on-mode t)
-	)
+  ;; (use-package lsp-tailwindcss
+  ;;   :straight (:host github :repo "merrickluo/lsp-tailwindcss")
+  ;;   :init
+  ;;   (setq lsp-tailwindcss-add-on-mode t))
 #+end_src
 
 
@@ -1236,28 +1148,6 @@ Refer https://github.com/llemaitre19/jtsx for installation steps.
 	(add-hook 'jtsx-tsx-mode-hook 'jtsx-bind-keys-to-jtsx-tsx-mode-map)
 	)
 #+end_src
-
-* LSP Mode simple
-#+BEGIN_COMMENT
-#+begin_src emacs-lisp
-  (use-package lsp-mode
-	 :init
-	 ;; set prefix for lsp-command-keymap (few alternatives - "C-l", "C-c l")
-	 (setq lsp-keymap-prefix "C-c l")
-	 :hook (;; replace XXX-mode with concrete major-mode(e. g. python-mode)
-			(typescript-mode . lsp)
-			(rjsx-mode . lsp)
-			;; if you want which-key integration
-			(lsp-mode . lsp-enable-which-key-integration)
-			(jtsx-jsx-mode . lsp)
-			(jtsx-tsx-mode . lsp)
-			(jtsx-typescript-mode . lsp))
-	 :commands lsp)
-
-	(use-package lsp-ui :commands lsp-ui-mode)
-
-#+end_src
-#+END_COMMENT
 
 * Gptel - LLM Client
   [[https://github.com/karthink/gptel][github]]
